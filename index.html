@@ -10,33 +10,85 @@
   <!-- Simplify.js (for smoothing + fewer points) -->
   <script src="https://cdn.jsdelivr.net/npm/simplify-js@1.2.3/simplify.min.js"></script>
 
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
   <style>
     body {
       font-family: sans-serif;
       margin: 20px;
       display: flex;
       gap: 20px;
+      flex-wrap: wrap;
     }
     .container {
       display: inline-block;
       text-align: center;
+      flex: 1;
+      min-width: 300px;
     }
     .stage-container {
       border: 1px solid #ccc;
       display: inline-block;
       background-color: #fafafa;
       position: relative;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .instructions {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      text-align: left;
+      width: 100%;
+    }
+    .instructions h3 {
+      margin-top: 0;
+      color: #333;
+    }
+    .instructions ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+    .instructions li {
+      margin: 8px 0;
+      color: #555;
     }
     h2 {
       margin-bottom: 0.5em;
     }
-    p {
-      font-style: italic;
-      color: #666;
+    
+    /* Mobile adjustments */
+    @media (max-width: 768px) {
+      body {
+        margin: 10px;
+        flex-direction: column;
+      }
+      .container {
+        width: 100%;
+        margin-bottom: 20px;
+      }
+      .stage-container {
+        width: 100%;
+      }
+      h2 {
+        font-size: 1.2em;
+      }
     }
   </style>
 </head>
 <body>
+
+<div class="instructions">
+  <h3>How to Use</h3>
+  <ul>
+    <li><strong>Drawing:</strong> Click and drag in the Sketch Stage to draw your shape</li>
+    <li><strong>Auto-Correction:</strong> Lines will automatically snap to horizontal or vertical</li>
+    <li><strong>Rectangles:</strong> End your drawing near the starting point to create a perfect shape</li>
+    <li><strong>Editing:</strong> In the Plan Stage, drag the red dots to adjust corners</li>
+    <li><strong>Moving:</strong> Click and drag anywhere on the shape to move it</li>
+  </ul>
+</div>
 
 <div class="container">
   <h2>Sketch Stage</h2>
@@ -323,6 +375,29 @@ function drawBoundingBox(layer, shape) {
   layer.add(shape);
   layer.add(boundingRect);
 }
+
+// Update the stage setup section
+function updateStageSizes() {
+  const containerWidth = Math.min(
+    document.querySelector('.stage-container').offsetWidth,
+    400
+  );
+  const stageHeight = Math.min(300, containerWidth * 0.75);
+
+  // Update sketch stage
+  sketchStage.width(containerWidth);
+  sketchStage.height(stageHeight);
+
+  // Update plan stage
+  planStage.width(containerWidth);
+  planStage.height(stageHeight);
+}
+
+// Initial setup
+updateStageSizes();
+
+// Update on window resize
+window.addEventListener('resize', updateStageSizes);
 </script>
 </body>
 </html>
