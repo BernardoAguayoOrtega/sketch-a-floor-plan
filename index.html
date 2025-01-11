@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Konva Floor Plan Demo – Rect Lines (No Extra Point)</title>
+
+  <!-- Konva -->
+  <script src="https://unpkg.com/konva@8/konva.min.js"></script>
+
+  <!-- Simplify.js (for smoothing + fewer points) -->
+  <script src="https://cdn.jsdelivr.net/npm/simplify-js@1.2.3/simplify.min.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+      display: flex;
+      gap: 20px;
+    }
+    .container {
+      display: inline-block;
+      text-align: center;
+    }
+    .stage-container {
+      border: 1px solid #ccc;
+      display: inline-block;
+      background-color: #fafafa;
+      position: relative;
+    }
+    h2 {
+      margin-bottom: 0.5em;
+    }
+    p {
+      font-style: italic;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Sketch Stage</h2>
+  <p>Draw freehand. On release, edges become <b>horizontal/vertical</b>. No extra point for rectangles.</p>
+  <div id="sketchStage" class="stage-container"></div>
+</div>
+
+<div class="container">
+  <h2>Plan Stage</h2>
+  <p>Each side is <b>rect line</b>, corners share anchors. A perfect rectangle has exactly 4 anchors.</p>
+  <div id="planStage" class="stage-container"></div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------
+// 1) Setup Konva Stages
+// ---------------------------------------------------------------------
+const SKETCH_WIDTH = 400;
+const SKETCH_HEIGHT = 300;
+const PLAN_WIDTH = 400;
+const PLAN_HEIGHT = 300;
+
+const sketchStage = new Konva.Stage({
+  container: 'sketchStage',
+  width: SKETCH_WIDTH,
+  height: SKETCH_HEIGHT
+});
+const sketchLayer = new Konva.Layer();
+sketchStage.add(sketchLayer);
+
+const planStage = new Konva.Stage({
+  container: 'planStage',
+  width: PLAN_WIDTH,
+  height: PLAN_HEIGHT
+});
+const planLayer = new Konva.Layer();
+planStage.add(planLayer);
+
+// ---------------------------------------------------------------------
+// 2) Freehand Drawing in the Sketch Stage
+// ---------------------------------------------------------------------
+let isDrawing = false;
+let currentLine = null;
+
+sketchStage.on('mousedown touchstart', (e) => {
+  e.evt.preventDefault();
+  isDrawing = true;
+  const pos = sketchStage.getPointerPosition();
+  currentLine = new Konva.Line({
+    stroke: '#333',
+    strokeWidth: 2,
+    tension: 0,
+    lineCap: 'round',
+    lineJoin: 'round',
+    points: [pos.x, pos.y]
+  });
+  sketchLayer.add(currentLine);
+});
+
+sketchStage.on('mousemove touchmove', (e) => {
+  if (!isDrawing || !currentLine) return;
+  const pos = sketchStage.getPointerPosition();
+  const updatedPoints = currentLine.points().concat([pos.x, pos.y]);
+  currentLine.points(updatedPoints);
+  sketchLayer.batchDraw();
+});
+
+sketchStage.on('mouseup touchend', () => {
+  isDrawing = false;
+  finalizeSketch();
+});
+
+// ---------------------------------------------------------------------
+// 3) Finalize: Snap to H/V, Remove Collinears, No Duplicate Endpoint
+// ---------------------------------------------------------------------
+function finalizeSketch() {
+  if (!currentLine || currentLine.points().length < 4) return;
+
+  // 1) Grab raw points and remove the freehand line
+  const rawPoints = currentLine.points();
+  currentLine.destroy();
+  currentLine = null;
+  sketchLayer.batchDraw();
+
+  // 2) Convert to { x, y }
+  let arr = toXYArray(rawPoints);
+
+  // 3) Simplify (reduce jitter)
+  arr = simplify(arr, 3, true);
+
+  // 4) Snap each segment to horizontal or vertical
+  arr = snapToHV(arr);
+
+  // 5) Remove collinear points
+  arr = removeCollinearPoints(arr);
+
+  // 6) NEW: Check if last point should connect to first
+  const first = arr[0];
+  const last = arr[arr.length - 1];
+  const dx = Math.abs(last.x - first.x);
+  const dy = Math.abs(last.y - first.y);
+  if (dx < 20 && dy < 20) { // If last point is close to first point
+    arr.pop(); // Remove the last point
+  }
+
+  // -------------------------------------------------------------------
+  // (A) For SKETCH PREVIEW: Show a closed shape (just for display)
+  // -------------------------------------------------------------------
+  const closedArrForSketch = [...arr, arr[0]];
+  const polygon = new Konva.Line({
+    points: fromXYArray(closedArrForSketch),
+    fill: '#ccc',
+    opacity: 0.4,
+    stroke: '#333',
+    strokeWidth: 2,
+    closed: true
+  });
+  sketchLayer.add(polygon);
+
+  // Optional: bounding box
+  drawBoundingBox(sketchLayer, polygon);
+  sketchLayer.batchDraw();
+
+  // (B) Meanwhile, 'arr' remains the unique corners (no extra final point)
+  moveToPlanStage(arr);
+}
+
+// ---------------------------------------------------------------------
+// 4) Move to Plan Stage, Each side is an independent line
+// ---------------------------------------------------------------------
+function moveToPlanStage(vertices) {
+  if (vertices.length < 3) return;
+
+  // 1) Compute bounding box to scale
+  const minX = Math.min(...vertices.map(p => p.x));
+  const maxX = Math.max(...vertices.map(p => p.x));
+  const minY = Math.min(...vertices.map(p => p.y));
+  const maxY = Math.max(...vertices.map(p => p.y));
+  const w = maxX - minX;
+  const h = maxY - minY;
+
+  const padding = 20;
+  const availableW = PLAN_WIDTH - 2 * padding;
+  const availableH = PLAN_HEIGHT - 2 * padding;
+  let scale = 1;
+  if (w > 0 && h > 0) {
+    scale = Math.min(availableW / w, availableH / h);
+  }
+
+  // 2) Scale the final corners
+  const scaledPoints = vertices.map(pt => ({
+    x: (pt.x - minX) * scale + padding,
+    y: (pt.y - minY) * scale + padding
+  }));
+
+  // 3) Create a group
+  const group = new Konva.Group({
+    draggable: true // user can move entire shape
+  });
+  planLayer.add(group);
+
+  // 4) Create anchors for each corner
+  const anchors = scaledPoints.map((pt, i) => {
+    const anchor = new Konva.Circle({
+      x: pt.x,
+      y: pt.y,
+      radius: 5,
+      fill: '#ff6b6b',
+      stroke: '#0066cc',
+      strokeWidth: 1,
+      draggable: true,
+      name: 'anchor-' + i
+    });
+    group.add(anchor);
+    return anchor;
+  });
+
+  // 5) Connect each anchor[i] => anchor[i+1], plus last => first
+  for (let i = 0; i < anchors.length; i++) {
+    const a1 = anchors[i];
+    const a2 = anchors[(i + 1) % anchors.length]; // wrap around
+    const line = new Konva.Line({
+      points: [a1.x(), a1.y(), a2.x(), a2.y()],
+      stroke: '#0066cc',
+      strokeWidth: 3
+    });
+    group.add(line);
+
+    // Recalculate line endpoints on anchor drag
+    a1.on('dragmove', () => updateLine(line, a1, a2));
+    a2.on('dragmove', () => updateLine(line, a1, a2));
+  }
+
+  planLayer.batchDraw();
+}
+
+// ---------------------------------------------------------------------
+// Helper: update line points on drag
+// ---------------------------------------------------------------------
+function updateLine(line, anchor1, anchor2) {
+  line.points([anchor1.x(), anchor1.y(), anchor2.x(), anchor2.y()]);
+  line.getLayer().batchDraw();
+}
+
+// ---------------------------------------------------------------------
+// Helper: Convert & Snap Functions
+// ---------------------------------------------------------------------
+function toXYArray(points) {
+  // [x0, y0, x1, y1, ...] => [{x, y}, ...]
+  const arr = [];
+  for (let i = 0; i < points.length; i += 2) {
+    arr.push({ x: points[i], y: points[i + 1] });
+  }
+  return arr;
+}
+
+function fromXYArray(xyArr) {
+  // [{x, y}, ...] => [x0, y0, x1, y1, ...]
+  const flat = [];
+  xyArr.forEach((pt) => {
+    flat.push(pt.x, pt.y);
+  });
+  return flat;
+}
+
+// Snap each segment to horizontal or vertical
+function snapToHV(pts) {
+  if (pts.length < 2) return pts;
+  const snapped = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const prev = snapped[i - 1];
+    const curr = pts[i];
+    const dx = curr.x - prev.x;
+    const dy = curr.y - prev.y;
+
+    // pick horizontal vs. vertical
+    if (Math.abs(dx) > Math.abs(dy)) {
+      // horizontal => same y
+      snapped.push({ x: curr.x, y: prev.y });
+    } else {
+      // vertical => same x
+      snapped.push({ x: prev.x, y: curr.y });
+    }
+  }
+  return snapped;
+}
+
+// Remove collinear points so each side is 2 corners
+function removeCollinearPoints(pts) {
+  if (pts.length < 3) return pts;
+  const out = [pts[0]];
+
+  for (let i = 1; i < pts.length - 1; i++) {
+    const prev = out[out.length - 1];
+    const curr = pts[i];
+    const next = pts[i + 1];
+    if (!isCollinear(prev, curr, next)) {
+      out.push(curr);
+    }
+  }
+  // keep the last
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+function isCollinear(a, b, c) {
+  // area ~ 0 => collinear
+  const area = a.x * (b.y - c.y) +
+               b.x * (c.y - a.y) +
+               c.x * (a.y - b.y);
+  return Math.abs(area) < 0.0001;
+}
+
+// Optional bounding box (dashed) in the Sketch Stage
+function drawBoundingBox(layer, shape) {
+  const box = shape.getClientRect();
+  const boundingRect = new Konva.Rect({
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height,
+    stroke: 'blue',
+    dash: [5, 5],
+    strokeWidth: 2
+  });
+  layer.add(shape);
+  layer.add(boundingRect);
+}
+</script>
+</body>
+</html>
